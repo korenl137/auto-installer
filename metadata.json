@@ -1,6 +1,6 @@
 {
   "name": "Windows Auto-Install Tool",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "release_date": "2026-06-30",
   "description": "A keyboard-driven TUI script to automate the batch installation of Windows applications.",
   "author": "Developed with help from an AI coding assistant",
