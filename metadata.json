@@ -3,7 +3,7 @@
   "version": "0.0.10",
   "release_date": "2026-06-30",
   "description": "A keyboard-driven TUI script to automate the batch installation of Windows applications.",
-  "author": "AI 코딩 어시스턴트의 도움을 받아 개발됨",
+  "author": "Developed with help from an AI coding assistant",
   "catalog_stats": {
     "winget_apps": 42,
     "msstore_apps": 3,
