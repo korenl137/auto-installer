@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.10] - 2026-06-30
+
+### Fixed
+- **기설치 오탐 (2세그먼트 접두사 매칭)**: `Test-IsAppInstalled`의 상위 2세그먼트 접두사 매칭이 세그먼트 경계(점)를 무시해 `Notion.Notion`을 설치된 `Notion.NotionCalendar`로 잘못 인식하던 문제 수정. 이제 `baseId`와 정확히 일치하거나 `baseId.` 형태로 시작하는 경우에만 매칭하여, `Google.Chrome.Beta` 같은 의도된 변형 매칭은 유지하면서 오탐을 차단.
+- **기설치 오탐 (이름 부분 일치 폴백)**: 이름 기준 폴백이 양방향 `Contains`로 너무 짧은 토큰까지 매칭하던 문제를 보완. 정확히 일치하거나 길이 5자 이상일 때만 부분 일치를 허용하도록 제한.
+- **한글 TUI 정렬 깨짐**: 선택 메뉴 및 상태 표시 라인이 문자 수 기준 `.PadRight(64)`로 채워져 전폭(2셀) 한글 행에서 정렬이 어긋나고 이전 라인이 덜 지워지던 문제를, 비주얼 너비 기반 `Get-VisualPadRight` 헬퍼로 교체하여 해결.
+
+### Changed
+- **PATH 갱신 1회화**: 설치 성공 앱마다 호출되던 `Refresh-EnvironmentPaths`를 배치 종료 후 실제 설치가 1건 이상일 때 1회만 호출하도록 변경 (반복 비용 및 세션 PATH 유실 방지).
+- **종료 코드 파싱**: `Get-FailReason`이 음수 종료 코드도 인식하도록 정규식 보강.
+
 ## [0.0.9] - 2026-06-22
 
 ### Added

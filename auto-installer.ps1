@@ -1,5 +1,5 @@
 # ================================================================
-# Windows 자동 설치 스크립트 v0.0.9 (TUI Refactored with Advanced Log Levels)
+# Windows 자동 설치 스크립트 v0.0.10 (TUI Refactored with Advanced Log Levels)
 # ※ 본 프로그램은 AI 코딩 어시스턴트의 도움을 받아 공동 개발되었습니다.
 # ================================================================
 
@@ -12,7 +12,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 #endregion
 
 # 로깅 폴더 및 파일 정의 (스크립트 실행 루트 폴더 하위의 logs)
-$SCRIPT_VERSION = "0.0.9"
+$SCRIPT_VERSION = "0.0.10"
 
 # Winget 종료 코드 상수
 $script:EXIT_ALREADY_INSTALLED = -1978335189
@@ -75,6 +75,14 @@ function Get-VisualWidth {
         }
     }
     return $width
+}
+
+# CJK 전폭 문자를 고려해 목표 비주얼 너비까지 공백을 채우는 함수 (.PadRight는 문자 수 기준이라 한글 정렬이 깨짐)
+function Get-VisualPadRight {
+    param([string]$String, [int]$Width = 64)
+    $visualWidth = Get-VisualWidth $String
+    $padNeeded = $Width - $visualWidth
+    return $String + (" " * [Math]::Max(0, $padNeeded))
 }
 
 # CJK 지원 박스 라인 출력 함수
@@ -358,19 +366,27 @@ function Test-IsAppInstalled {
     }
 
     # 4. 일반적인 상위 2세그먼트(예: Google.Chrome) 부분 일치 감지
+    #    세그먼트 경계(점)까지 일치해야 함: "notion.notion"이 "notion.notioncalendar"를 잘못 매칭하던 오탐 방지
     $parts = $normalizedId -split '\.'
     if ($parts.Count -ge 2) {
         $baseId = "$($parts[0]).$($parts[1])"
         foreach ($instId in $script:installedIds.Keys) {
-            if ($instId.StartsWith($baseId)) {
+            if ($instId -eq $baseId -or $instId.StartsWith("$baseId.")) {
                 return $true
             }
         }
     }
 
     # 5. ID가 없는 GitHub 앱 및 수동 설치 앱 등 이름 기준 스마트 매치 추가 폴백
+    #    너무 짧은 토큰의 부분 일치는 오탐을 유발하므로 5자 이상에 한해 부분 일치 허용
     foreach ($instName in $script:installedNames.Keys) {
-        if ($instName.Contains($normalizedId) -or $normalizedId.Contains($instName)) {
+        if ($instName -eq $normalizedId) {
+            return $true
+        }
+        if ($normalizedId.Length -ge 5 -and $instName.Contains($normalizedId)) {
+            return $true
+        }
+        if ($instName.Length -ge 5 -and $normalizedId.Contains($instName)) {
             return $true
         }
     }
@@ -625,10 +641,10 @@ function Show-TUISelectionMenu {
                     $displayLine += ("─" * $fillerLength)
                     
                     if ($lineIdx -eq $cursorIndex) {
-                        Write-Host $displayLine.PadRight(64) -ForegroundColor Cyan -BackgroundColor DarkBlue
+                        Write-Host (Get-VisualPadRight $displayLine 64) -ForegroundColor Cyan -BackgroundColor DarkBlue
                     }
                     else {
-                        Write-Host $displayLine.PadRight(64) -ForegroundColor Yellow
+                        Write-Host (Get-VisualPadRight $displayLine 64) -ForegroundColor Yellow
                     }
                 }
                 else {
@@ -655,10 +671,10 @@ function Show-TUISelectionMenu {
                     }
                     
                     if ($lineIdx -eq $cursorIndex) {
-                        Write-Host ("$prefix$check $nameText").PadRight(64) -ForegroundColor $fg -BackgroundColor DarkBlue
+                        Write-Host (Get-VisualPadRight "$prefix$check $nameText" 64) -ForegroundColor $fg -BackgroundColor DarkBlue
                     }
                     else {
-                        Write-Host ("$prefix$check $nameText").PadRight(64) -ForegroundColor $fg
+                        Write-Host (Get-VisualPadRight "$prefix$check $nameText" 64) -ForegroundColor $fg
                     }
                 }
             }
@@ -677,7 +693,7 @@ function Show-TUISelectionMenu {
         if ($aboveCount -gt 0 -or $belowCount -gt 0) {
             $posText += "  (▲ ${aboveCount} ▼ ${belowCount})"
         }
-        Write-Host $posText.PadRight(64) -ForegroundColor DarkGray
+        Write-Host (Get-VisualPadRight $posText 64) -ForegroundColor DarkGray
 
         # 색상 범례
         Write-Host " ■" -ForegroundColor White -NoNewline; Write-Host " 미설치" -ForegroundColor DarkGray -NoNewline
@@ -687,7 +703,7 @@ function Show-TUISelectionMenu {
 
         $selectedCount = ($listLines | Where-Object { -not $_.IsHeader -and $_.Selected }).Count
         $totalCount = ($listLines | Where-Object { -not $_.IsHeader }).Count
-        Write-Host " 선택됨: $selectedCount / $totalCount 개 앱 목록 (전체 $totalCount 개)".PadRight(64) -ForegroundColor Green
+        Write-Host (Get-VisualPadRight " 선택됨: $selectedCount / $totalCount 개 앱 목록 (전체 $totalCount 개)" 64) -ForegroundColor Green
 
         $keyInfo = [Console]::ReadKey($true)
         switch ($keyInfo.Key) {
@@ -739,7 +755,7 @@ function Show-TUISelectionMenu {
                 $selItems = @($listLines | Where-Object { -not $_.IsHeader -and $_.Selected })
                 if ($selItems.Count -eq 0) {
                     Set-SafeCursor 0 ($pageSize + 7)
-                    Write-Host " [!] 선택된 앱이 없습니다. 설치하려면 최소 하나의 앱을 선택해 주세요.".PadRight(64) -ForegroundColor Yellow
+                    Write-Host (Get-VisualPadRight " [!] 선택된 앱이 없습니다. 설치하려면 최소 하나의 앱을 선택해 주세요." 64) -ForegroundColor Yellow
                     Start-Sleep -Milliseconds 1200
                     continue
                 }
@@ -1008,7 +1024,7 @@ function Get-FailReason {
     if (-not $Output) { return '알 수 없는 오류' }
     if ($Output -match 'No package found|패키지를 찾을 수 없') { return '패키지 없음' }
     if ($Output -match 'No applicable installer') { return '호환 설치 파일 없음' }
-    if ($Output -match 'exit code[:\s]+(\d+)') { return "설치 오류 (종료 코드 $($Matches[1]))" }
+    if ($Output -match 'exit code[:\s]+(-?\d+)') { return "설치 오류 (종료 코드 $($Matches[1]))" }
     if ($Output -match 'Installer failed|설치.*실패') { return '설치 프로그램 오류' }
     if ($Output -match 'No applicable upgrade') { return '업그레이드 불가' }
     if ($Output -match 'Failed in attempting to update') { return '소스 업데이트 실패' }
@@ -1216,7 +1232,7 @@ function Invoke-Install {
         if ($isAlreadyInstalled) {
             Write-Log -Level "INFO" -Message "$name is already installed. Skipping installer run."
             $resultLine = "  $prefix  $namePad ◽ 이미 설치됨"
-            Write-Host $resultLine.PadRight(64) -ForegroundColor DarkGray
+            Write-Host (Get-VisualPadRight $resultLine 64) -ForegroundColor DarkGray
             $done.Add([PSCustomObject]@{ Name = $name; Time = 0; IsAlreadyInstalled = $true })
             continue
         }
@@ -1259,7 +1275,7 @@ function Invoke-Install {
         
         [Console]::Write("`r")
         $resultLine = "  $prefix  $namePad $sym ($duration초 소요)"
-        Write-Host $resultLine.PadRight(64) -ForegroundColor $col
+        Write-Host (Get-VisualPadRight $resultLine 64) -ForegroundColor $col
         
         if (-not $ok) {
             Write-Log -Level "ERROR" -Message "Installation failed for $name." -Detail $res.Reason
@@ -1269,8 +1285,13 @@ function Invoke-Install {
         else {
             Write-Log -Level "INFO" -Message "Installation succeeded for $name in $duration seconds."
             $done.Add([PSCustomObject]@{ Name = $name; Time = $duration; IsAlreadyInstalled = $false })
-            Refresh-EnvironmentPaths
         }
+    }
+
+    # 배치 전체에서 실제 설치가 1건이라도 발생한 경우에만 PATH를 1회 갱신 (앱마다 반복 갱신하던 비용/세션 PATH 유실 방지)
+    $newlyInstalled = @($done | Where-Object { -not $_.IsAlreadyInstalled }).Count
+    if ($newlyInstalled -gt 0) {
+        Refresh-EnvironmentPaths
     }
 
     Write-Log -Level "INFO" -Message "Installation loop completed." -Detail "Success: $($done.Count) | Failed: $($failed.Count) | Skipped: $($skipped.Count)"
