@@ -1,5 +1,5 @@
 # ================================================================
-# Windows Auto-Install Script v0.0.10 (TUI Refactored with Advanced Log Levels)
+# Windows Auto-Install Script v0.0.11 (TUI Refactored with Advanced Log Levels)
 # This program was co-developed with the help of an AI coding assistant.
 # ================================================================
 
@@ -12,7 +12,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 #endregion
 
 # Logging folder and file definitions (logs under the script root folder)
-$SCRIPT_VERSION = "0.0.10"
+$SCRIPT_VERSION = "0.0.11"
 
 # Winget exit code constants
 $script:EXIT_ALREADY_INSTALLED = -1978335189
@@ -611,7 +611,7 @@ function Show-TUISelectionMenu {
         Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
         Write-Host "║               Windows Auto-Install Program v$SCRIPT_VERSION              ║" -ForegroundColor Cyan
         Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-        Write-Host " [↑/↓] Move  [Space] Toggle  [A] Select all  [N] Deselect all  [Enter] Start  [Esc] Cancel" -ForegroundColor DarkGray
+        Write-Host " [↑/↓] Move  [←/→] Jump section  [Space] Toggle  [A] Select all  [N] Deselect all  [Enter] Start  [Esc] Cancel" -ForegroundColor DarkGray
         Write-Host " This program was developed with the help of an AI coding assistant." -ForegroundColor DarkGray
         Write-Host "----------------------------------------------------------------" -ForegroundColor Gray
 
@@ -714,6 +714,24 @@ function Show-TUISelectionMenu {
             "DownArrow" {
                 $cursorIndex++
                 if ($cursorIndex -ge $listLines.Count) { $cursorIndex = 0 }
+            }
+            "RightArrow" {
+                # Jump to the next section header (wraps to the first)
+                $headerIndices = @(for ($idx = 0; $idx -lt $listLines.Count; $idx++) { if ($listLines[$idx].IsHeader) { $idx } })
+                if ($headerIndices.Count -gt 0) {
+                    $next = $headerIndices | Where-Object { $_ -gt $cursorIndex } | Select-Object -First 1
+                    if ($null -eq $next) { $next = $headerIndices[0] }
+                    $cursorIndex = $next
+                }
+            }
+            "LeftArrow" {
+                # Jump to the previous section header (wraps to the last)
+                $headerIndices = @(for ($idx = 0; $idx -lt $listLines.Count; $idx++) { if ($listLines[$idx].IsHeader) { $idx } })
+                if ($headerIndices.Count -gt 0) {
+                    $prev = $headerIndices | Where-Object { $_ -lt $cursorIndex } | Select-Object -Last 1
+                    if ($null -eq $prev) { $prev = $headerIndices[-1] }
+                    $cursorIndex = $prev
+                }
             }
             "Spacebar" {
                 if ($listLines[$cursorIndex].IsHeader) {

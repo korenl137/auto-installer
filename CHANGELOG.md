@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.11] - 2026-06-30
+
+### Added
+- Added Left/Right arrow navigation in the selection menu to jump to the previous/next section header.
+
 ## [0.0.10] - 2026-06-30
 
 ### Fixed
