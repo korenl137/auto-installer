@@ -1,9 +1,9 @@
 # ================================================================
-# Windows 자동 설치 스크립트 v0.0.9 (TUI Refactored with Advanced Log Levels)
-# ※ 본 프로그램은 AI 코딩 어시스턴트의 도움을 받아 공동 개발되었습니다.
+# Windows Auto-Install Script v0.0.10 (TUI Refactored with Advanced Log Levels)
+# This program was co-developed with the help of an AI coding assistant.
 # ================================================================
 
-#region ── 관리자 권한 자동 승격 (로그 생성 전 최우선 처리)
+#region ── Automatic elevation to administrator (before log creation)
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $exe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
     Start-Process $exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
@@ -11,10 +11,10 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 #endregion
 
-# 로깅 폴더 및 파일 정의 (스크립트 실행 루트 폴더 하위의 logs)
-$SCRIPT_VERSION = "0.0.9"
+# Logging folder and file definitions (logs under the script root folder)
+$SCRIPT_VERSION = "0.0.10"
 
-# Winget 종료 코드 상수
+# Winget exit code constants
 $script:EXIT_ALREADY_INSTALLED = -1978335189
 $script:EXIT_REBOOT_REQUIRED = 3010
 $script:EXIT_REBOOT_INITIATED = 1641
@@ -28,7 +28,7 @@ $LOG_FILE = Join-Path $LOG_DIR "auto-install-log-$timestamp.txt"
 "=== Windows Auto-Install v$SCRIPT_VERSION Log ===" | Out-File $LOG_FILE -Force -Encoding UTF8
 "Started at: $(Get-Date)" | Out-File $LOG_FILE -Append -Encoding UTF8
 
-# 로그 레벨 지원 출력 함수
+# Logging helper with level support
 function Write-Log {
     param(
         [ValidateSet("INFO", "DEBUG", "WARN", "ERROR")]
@@ -47,18 +47,18 @@ function Write-Log {
 
 Write-Log -Level "INFO" -Message "Administrator privileges confirmed."
 
-# 콘솔 코드 페이지 및 입출력 인코딩 UTF-8 강제 (TUI 이모지 및 외부 winget 한글 출력 깨짐 방지)
+# Force UTF-8 console code page and I/O encoding (prevents TUI emoji and winget output corruption)
 if (Get-Command chcp -ErrorAction SilentlyContinue) {
     $null = & chcp 65001
 }
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
-# TLS 1.2 강제 활성화 (GitHub API 및 웹 다운로드 에러 방지)
+# Force TLS 1.2 (avoids GitHub API and web download errors)
 Write-Log -Level "DEBUG" -Message "Setting SecurityProtocol to TLS 1.2."
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# CJK 및 특수문자 전폭 문자열 너비 계산 함수
+# Calculate display width for CJK and other full-width characters
 function Get-VisualWidth {
     param([string]$String)
     if (-not $String) { return 0 }
@@ -77,7 +77,15 @@ function Get-VisualWidth {
     return $width
 }
 
-# CJK 지원 박스 라인 출력 함수
+# Pad strings to a target visual width for full-width characters (.PadRight counts characters and breaks CJK alignment)
+function Get-VisualPadRight {
+    param([string]$String, [int]$Width = 64)
+    $visualWidth = Get-VisualWidth $String
+    $padNeeded = $Width - $visualWidth
+    return $String + (" " * [Math]::Max(0, $padNeeded))
+}
+
+# Box-line output helper for CJK-friendly rendering
 function Write-BorderLine {
     param([string]$Content, [string]$Color = "White", [int]$Width = 64)
     $visualWidth = Get-VisualWidth $Content
@@ -86,7 +94,7 @@ function Write-BorderLine {
     Write-Host "║$paddedContent║" -ForegroundColor $Color
 }
 
-# 안전한 Cursor Position 설정 헬퍼 (Buffer 경계 예외 방지)
+# Safe cursor-position helper (avoids buffer boundary exceptions)
 function Set-SafeCursor {
     param([int]$Left, [int]$Top)
     try {
@@ -99,9 +107,9 @@ function Set-SafeCursor {
     catch {}
 }
 
-# 환경 변수 새로고침 (PATH Refresh)
+# Refresh environment variables (PATH)
 function Refresh-EnvironmentPaths {
-    Write-Host "  -> 환경 변수(PATH) 실시간 갱신 중..." -ForegroundColor DarkGray
+    Write-Host "  -> Refreshing environment PATH in real time..." -ForegroundColor DarkGray
     Write-Log -Level "DEBUG" -Message "Refreshing session Environment PATH."
     try {
         $machinePath = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("System\CurrentControlSet\Control\Session Manager\Environment").GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
@@ -130,30 +138,30 @@ function Refresh-EnvironmentPaths {
     }
 }
 
-# Winget 미설치 시 준비 부트스트랩
+# Winget bootstrap when not installed
 Write-Log -Level "INFO" -Message "Checking if winget is available on system PATH."
-Write-Host "패키지 매니저(winget) 상태를 점검하고 있습니다..." -ForegroundColor DarkGray
+Write-Host "Checking package manager (winget) availability..." -ForegroundColor DarkGray
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     Write-Log -Level "WARN" -Message "winget not found on PATH. Attempting automatic bootstrap installation."
-    Write-Host "winget을 찾을 수 없어 자동 설치를 시작합니다..." -ForegroundColor Yellow
+    Write-Host "winget was not found, so automatic installation will start..." -ForegroundColor Yellow
     $msixUrl = "https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
     $msixPath = Join-Path $env:TEMP "Microsoft.DesktopAppInstaller.msixbundle"
     
     try {
         Write-Log -Level "INFO" -Message "Downloading winget package." -Detail "URL: $msixUrl`nTarget: $msixPath"
-        Write-Host "winget 패키지 다운로드 중..." -ForegroundColor Gray
+        Write-Host "Downloading winget package..." -ForegroundColor Gray
         $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -Uri $msixUrl -OutFile $msixPath -UseBasicParsing
         $ProgressPreference = 'Continue'
         
         Write-Log -Level "INFO" -Message "Installing downloaded AppInstaller msixbundle."
-        Write-Host "winget 패키지 설치 중..." -ForegroundColor Gray
+        Write-Host "Installing winget package..." -ForegroundColor Gray
         Add-AppxPackage -Path $msixPath
         Remove-Item $msixPath -Force -ErrorAction SilentlyContinue
         
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             Write-Log -Level "INFO" -Message "winget successfully installed and verified."
-            Write-Host "winget 설치 완료!" -ForegroundColor Green
+            Write-Host "winget installation complete!" -ForegroundColor Green
         }
         else {
             Write-Log -Level "WARN" -Message "winget installed but command is not immediately visible on current session."
@@ -162,15 +170,15 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     catch {
         $err = $_.Exception.Message
         Write-Log -Level "ERROR" -Message "winget bootstrap installation failed." -Detail $err
-        Write-Host "winget 자동 설치 실패: $err" -ForegroundColor Red
-        Write-Host "Microsoft Store에서 '앱 설치 관리자(App Installer)'를 업데이트해 주세요." -ForegroundColor Yellow
+        Write-Host "winget automatic installation failed: $err" -ForegroundColor Red
+        Write-Host "Please update 'App Installer' from Microsoft Store." -ForegroundColor Yellow
     }
 }
 else {
     Write-Log -Level "INFO" -Message "winget verified on system PATH."
 }
 
-# 기설치 앱 정보를 스캔하고 전역 해시테이블에 갱신하는 모듈화 함수
+# Scan installed apps and refresh the global hashtables
 $script:installedIds = @{}
 $script:installedNames = @{}
 
@@ -243,7 +251,7 @@ function Get-SafeContentTail {
 
 function Scan-InstalledApps {
     Write-Log -Level "INFO" -Message "Querying installed apps using winget list."
-    Write-Host "현재 설치되어 있는 프로그램 목록을 조회하고 있습니다..." -ForegroundColor DarkGray
+    Write-Host "Querying the list of installed programs..." -ForegroundColor DarkGray
     
     $script:installedIds = @{}
     $script:installedNames = @{}
@@ -252,7 +260,7 @@ function Scan-InstalledApps {
         try {
             $listOutput = & winget list --accept-source-agreements 2>&1
             
-            # 구분선(----)으로 헤더/데이터 경계를 결정하고, 한국어/영어 양쪽 로케일 헤더를 지원하는 동적 파서
+            # Dynamic parser that uses the separator line (----) to detect the header/data boundary and supports both Korean and English locale headers
             $separatorIdx = -1
             for ($idx = 0; $idx -lt $listOutput.Count; $idx++) {
                 if ($null -eq $listOutput[$idx]) { continue }
@@ -266,18 +274,18 @@ function Scan-InstalledApps {
             if ($separatorIdx -gt 0) {
                 $headerLine = $listOutput[$separatorIdx - 1].ToString()
                 
-                # 한국어 로케일: "장치 ID", 영어 로케일: "Id" (대소문자 및 로케일 대응 보강)
+# Korean locale: "장치 ID", English locale: "Id" (case-insensitive and locale-aware)
                 $krIdPos = $headerLine.IndexOf("장치 ID", [System.StringComparison]::OrdinalIgnoreCase)
                 $enIdPos = $headerLine.IndexOf("Id", [System.StringComparison]::OrdinalIgnoreCase)
                 $rawIdPos = if ($krIdPos -ge 0) { $krIdPos } else { $enIdPos }
                 
-                # 한국어 로케일: "버전", 영어 로케일: "Version"
+                # Korean locale: "버전", English locale: "Version"
                 $krVerPos = $headerLine.IndexOf("버전", [System.StringComparison]::OrdinalIgnoreCase)
                 $enVerPos = $headerLine.IndexOf("Version", [System.StringComparison]::OrdinalIgnoreCase)
                 $rawVerPos = if ($krVerPos -ge 0) { $krVerPos } else { $enVerPos }
                 
                 if ($rawIdPos -ge 0 -and $rawVerPos -gt $rawIdPos) {
-                    # 문자열 상의 원본 인덱스 대신 비주얼 너비 상의 인덱스를 계산하여 보정
+                    # Correct using visual-width indices instead of raw string indices
                     $idStartWidth = Get-VisualWidth ($headerLine.Substring(0, $rawIdPos))
                     $versionStartWidth = Get-VisualWidth ($headerLine.Substring(0, $rawVerPos))
                     $idLengthWidth = $versionStartWidth - $idStartWidth
@@ -289,7 +297,7 @@ function Scan-InstalledApps {
                         $line = $listOutput[$i].ToString()
                         if (-not $line -or $line.Trim() -eq "") { continue }
                         
-                        # 비주얼 서브스트링으로 오차 없이 Name과 ID 분리 추출
+                        # Use visual-width substrings to split Name and ID without drift
                         $nameToken = Get-VisualSubstring -String $line -StartWidth 0 -LengthWidth $idStartWidth
                         $idToken = Get-VisualSubstring -String $line -StartWidth $idStartWidth -LengthWidth $idLengthWidth
                         
@@ -317,7 +325,7 @@ function Scan-InstalledApps {
     }
 }
 
-# 기설치 앱 스마트 매칭 헬퍼 함수 (버전 및 마이너 계열 접두사 일치 지원)
+# Smart installed-app matching helper (supports version and minor-series prefix matches)
 function Test-IsAppInstalled {
     param(
         [string]$AppId
@@ -326,19 +334,19 @@ function Test-IsAppInstalled {
     $normalizedId = $AppId.ToLower()
 
 
-    # 1. Exact Match 우선 확인
+    # 1. Check exact match first
     if ($script:installedIds.ContainsKey($normalizedId)) {
         return $true
     }
 
-    # 2. Custom Mappings 확인 (대체 ID 혹은 표시 이름이 설치되어 있는지)
+    # 2. Check custom mappings (alternate ID or display name)
     if ($script:APP_CUSTOM_MAPPINGS.ContainsKey($normalizedId)) {
         foreach ($alt in $script:APP_CUSTOM_MAPPINGS[$normalizedId]) {
-            # ID 매칭
+            # ID match
             if ($script:installedIds.ContainsKey($alt)) {
                 return $true
             }
-            # Name 매칭 (상호 부분 일치 포함)
+            # Name match (including bidirectional partial match)
             foreach ($instName in $script:installedNames.Keys) {
                 if ($instName.Contains($alt) -or $alt.Contains($instName)) {
                     return $true
@@ -347,7 +355,7 @@ function Test-IsAppInstalled {
         }
     }
 
-    # 3. 마이너 버전 분화가 활발한 특정 대표 패키지 접두사 매칭
+    # 3. Prefix matching for representative packages with active minor-version branching
     if ($normalizedId -match '^(python\.python\.3|microsoft\.visualstudiocode|git\.git)') {
         $prefix = $Matches[1]
         foreach ($instId in $script:installedIds.Keys) {
@@ -357,25 +365,33 @@ function Test-IsAppInstalled {
         }
     }
 
-    # 4. 일반적인 상위 2세그먼트(예: Google.Chrome) 부분 일치 감지
+    # 4. Generic two-segment prefix match (for example, Google.Chrome)
+    #    Require a segment boundary: prevents false positives such as matching notion.notioncalendar for notion.notion
     $parts = $normalizedId -split '\.'
     if ($parts.Count -ge 2) {
         $baseId = "$($parts[0]).$($parts[1])"
         foreach ($instId in $script:installedIds.Keys) {
-            if ($instId.StartsWith($baseId)) {
+            if ($instId -eq $baseId -or $instId.StartsWith("$baseId.")) {
                 return $true
             }
         }
     }
 
-    # 5. ID가 없는 GitHub 앱 및 수동 설치 앱 등 이름 기준 스마트 매치 추가 폴백
+    # 5. Additional name-based fallback for GitHub apps and manually installed apps without IDs
+    #    Partial matches on very short tokens cause false positives, so allow them only for tokens 5+ characters long
     foreach ($instName in $script:installedNames.Keys) {
-        if ($instName.Contains($normalizedId) -or $normalizedId.Contains($instName)) {
+        if ($instName -eq $normalizedId) {
+            return $true
+        }
+        if ($normalizedId.Length -ge 5 -and $instName.Contains($normalizedId)) {
+            return $true
+        }
+        if ($instName.Length -ge 5 -and $normalizedId.Contains($instName)) {
             return $true
         }
     }
 
-    # 6. Malware Zero 특수 폴더 경로 감지 규칙 (포터블 형식 대응)
+    # 6. Malware Zero special folder-path detection rule (portable format support)
     if ($normalizedId -eq "malware zero") {
         $desktop = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
         $downloads = [System.IO.Path]::Combine($env:USERPROFILE, "Downloads")
@@ -395,7 +411,7 @@ function Test-IsAppInstalled {
 }
 
 # ================================================================
-#region ── 앱 카탈로그
+#region ── App catalog
 # ================================================================
 $WINGET = [ordered]@{
     "Google Chrome"       = @{ id = "Google.Chrome"; sec = 60; cat = "Browser / AI" }
@@ -454,39 +470,39 @@ $GITHUB = [ordered]@{
 }
 
 $MANUAL = [ordered]@{
-    "Adobe Creative Cloud" = @{ url = ""; note = "USB 수동 설치 필요 (정품 인증 및 로그인)" }
-    "Microsoft Office"     = @{ url = ""; note = "USB 수동 설치 필요 (정품 인증 및 로그인)" }
-    "한컴오피스"                = @{ url = ""; note = "USB 수동 설치 필요 (라이선스 키 필요)" }
-    "Autodesk Fusion"      = @{ url = "https://manage.autodesk.com/"; note = "공식 사이트에서 설치 파일 다운로드 후 수동 설치" }
-    "FreeFileSync"         = @{ url = "https://freefilesync.org/download.php"; note = "공식 사이트에서 다운로드 후 수동 설치 (무음 설치 미지원)" }
-    "Equalizer APO"        = @{ url = "https://sourceforge.net/projects/equalizerapo/"; note = "공식 사이트에서 다운로드 후 수동 설치" }
-    "Malware Zero"         = @{ url = "https://malzero.xyz"; note = "공식 사이트에서 다운로드 후 압축 해제하여 실행" }
+    "Adobe Creative Cloud" = @{ url = ""; note = "USB manual installation required (activation and sign-in)" }
+    "Microsoft Office"     = @{ url = ""; note = "USB manual installation required (activation and sign-in)" }
+    "Hancom Office"                = @{ url = ""; note = "USB manual installation required (license key required)" }
+    "Autodesk Fusion"      = @{ url = "https://manage.autodesk.com/"; note = "Download the installer from the official site and install manually" }
+    "FreeFileSync"         = @{ url = "https://freefilesync.org/download.php"; note = "Download from the official site and install manually (silent install not supported)" }
+    "Equalizer APO"        = @{ url = "https://sourceforge.net/projects/equalizerapo/"; note = "Download from the official site and install manually" }
+    "Malware Zero"         = @{ url = "https://malzero.xyz"; note = "Download from the official site, extract it, and run it" }
 }
 #endregion
 
-# 0. 커스텀 대체 ID 및 표시 이름 매핑 정의 (스토어 ID, GitHub, 특수 설치 매칭용)
+# 0. Define custom alternate IDs and display-name mappings (for Store IDs, GitHub, and special installs)
 $script:APP_CUSTOM_MAPPINGS = @{
     "9pm860492szd"             = @("microsoft.microsoftpcmanager", "pc manager", "windows pc manager") # Windows PC Manager
     "xpddt99j9gkb5c"           = @("samsung magician", "samsung.magician", "samsungmagician")        # Samsung Magician
     "9pf4kz2vn4w9"             = @("translucenttb")                                                 # TranslucentTB
     "cognitionai.devindesktop" = @("devin (user)", "devin")                               # Devin Desktop
-    "kakao.kakaotalk"          = @("카카오톡", "kakaotalk")                                         # KakaoTalk 한글 매칭 보장
+    "kakao.kakaotalk"          = @("KakaoTalk", "kakaotalk")                                         # Ensure KakaoTalk matches Korean display names
     
     "mgth.littlebigmouse"      = @("littlebigmouse", "arp\machine\x86\littlebigmouse")         # LittleBigMouse
     "qmk msys"                 = @("qmk msys", "qmk msys 1.12.0")                             # QMK MSYS
     "claude-usage-widget"      = @("claude-usage-widget", "claude-usage-widget 1.7.5")         # claude-usage-widget
     
-    # 수동 설치 항목 매핑 추가
+    # Add manual-install item mappings
     "adobe creative cloud"     = @("adobe.creativecloud", "adobe creative cloud")
-    "microsoft office"         = @("o365proplusretail", "microsoft 365", "office", "엔터프라이즈용 microsoft 365")
-    "한컴오피스"                    = @("한컴오피스")
+    "microsoft office"         = @("o365proplusretail", "microsoft 365", "office", "Microsoft 365 for enterprise")
+    "Hancom Office"                    = @("Hancom Office")
     "autodesk fusion"          = @("autodesk fusion", "fusion 360")
     "freefilesync"             = @("freefilesync")
     "equalizer apo"            = @("equalizer apo", "equalizerapo")
 }
 
 # ================================================================
-#region ── 선택 TUI UI
+#region ── Selection TUI UI
 # ================================================================
 function Show-TUISelectionMenu {
     Write-Log -Level "DEBUG" -Message "Loading TUI selection menu."
@@ -496,14 +512,14 @@ function Show-TUISelectionMenu {
         param($name, $appInfo, $source)
         $cat = $appInfo.cat
         if (-not $cat) {
-            if ($source -eq "manual") { $cat = "Manual Setup" }
+            if ($source -eq "manual") { $cat = "Manual setup" }
             else { $cat = "Others" }
         }
         if (-not $categories.Contains($cat)) {
             $categories[$cat] = [System.Collections.Generic.List[PSCustomObject]]::new()
         }
         
-        # 이미 깔려있는지 점검 (수동 설치는 미설치 상태로 표기하기 위해 무조건 false 처리)
+        # Check whether the app is already installed (manual installs are always treated as not installed)
         $isInstalled = $false
         if ($source -ne "manual") {
             $detectId = if ($appInfo.id) { $appInfo.id } else { $name }
@@ -514,7 +530,7 @@ function Show-TUISelectionMenu {
             }
         }
         
-        # 이미 설치된 경우 기본적으로 선택(체크) 해제 (수동 설치는 항상 기본 체크 true)
+        # If already installed, deselect by default (manual installs remain checked by default)
         $defaultSelect = if ($isInstalled) { $false } else { $true }
         
         $categories[$cat].Add([PSCustomObject]@{
@@ -532,7 +548,7 @@ function Show-TUISelectionMenu {
     foreach ($name in $GITHUB.Keys) { & $addApp $name $GITHUB[$name] "github" }
     foreach ($name in $MANUAL.Keys) { & $addApp $name $MANUAL[$name] "manual" }
 
-    # 단일 배열로 평탄화
+    # Flatten into a single array
     $listLines = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($cat in $categories.Keys) {
         $listLines.Add([PSCustomObject]@{
@@ -552,7 +568,7 @@ function Show-TUISelectionMenu {
         }
     }
 
-    # 화면 높이 자동 반응 높이 결정 (출력 라인 수 $pageSize + 10이 WindowHeight를 초과해 잘리지 않도록 마진 보정)
+    # Auto-adjust page height based on the console window (adds margin so $pageSize + 10 output lines do not exceed WindowHeight)
     $pageSize = 12
     try {
         $dynamicSize = [Console]::WindowHeight - 12
@@ -593,10 +609,10 @@ function Show-TUISelectionMenu {
         Set-SafeCursor 0 0
         
         Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║               Windows 자동 설치 프로그램 v$SCRIPT_VERSION              ║" -ForegroundColor Cyan
+        Write-Host "║               Windows Auto-Install Program v$SCRIPT_VERSION              ║" -ForegroundColor Cyan
         Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-        Write-Host " [↑/↓] 이동  [Space] 선택/해제  [A] 전체선택  [N] 전체해제  [Enter] 시작  [Esc] 취소" -ForegroundColor DarkGray
-        Write-Host " ※ 본 프로그램은 AI 코딩 어시스턴트의 도움을 받아 개발되었습니다." -ForegroundColor DarkGray
+        Write-Host " [↑/↓] Move  [Space] Toggle  [A] Select all  [N] Deselect all  [Enter] Start  [Esc] Cancel" -ForegroundColor DarkGray
+        Write-Host " This program was developed with the help of an AI coding assistant." -ForegroundColor DarkGray
         Write-Host "----------------------------------------------------------------" -ForegroundColor Gray
 
         for ($i = 0; $i -lt $pageSize; $i++) {
@@ -606,7 +622,7 @@ function Show-TUISelectionMenu {
                 if ($line.IsHeader) {
                     $prefix = if ($lineIdx -eq $cursorIndex) { " > " } else { "   " }
                     
-                    # 하위 항목의 선택 상태 계산
+                    # Compute the selection state of child items
                     $subApps = @()
                     for ($idx = $lineIdx + 1; $idx -lt $listLines.Count; $idx++) {
                         if ($listLines[$idx].IsHeader) { break }
@@ -619,23 +635,23 @@ function Show-TUISelectionMenu {
                     elseif ($selectedCount -gt 0) { "[-]" }
                     else { "[ ]" }
                     
-                    $headerText = "$($line.Text.ToUpper()) ($($subApps.Count)개)"
+                    $headerText = "$($line.Text.ToUpper()) ($($subApps.Count) apps)"
                     $displayLine = "$prefix$headerCheck 📂 $headerText "
                     $fillerLength = [Math]::Max(2, 60 - (Get-VisualWidth $displayLine))
                     $displayLine += ("─" * $fillerLength)
                     
                     if ($lineIdx -eq $cursorIndex) {
-                        Write-Host $displayLine.PadRight(64) -ForegroundColor Cyan -BackgroundColor DarkBlue
+                        Write-Host (Get-VisualPadRight $displayLine 64) -ForegroundColor Cyan -BackgroundColor DarkBlue
                     }
                     else {
-                        Write-Host $displayLine.PadRight(64) -ForegroundColor Yellow
+                        Write-Host (Get-VisualPadRight $displayLine 64) -ForegroundColor Yellow
                     }
                 }
                 else {
                     $prefix = if ($lineIdx -eq $cursorIndex) { " > " } else { "   " }
                     $check = if ($line.Selected) { "[x]" } else { "[ ]" }
                     
-                    # 수동 설치는 항상 DarkYellow(주황), 일반 앱은 포커스 시 Cyan / 기설치 시 DarkGreen / 미설치 시 White
+                    # Manual installs are always DarkYellow, regular apps are Cyan when focused, DarkGreen when already installed, and White when not installed
                     $fg = if ($lineIdx -eq $cursorIndex) { "Cyan" }
                     elseif ($line.Source -eq "manual") { "DarkYellow" }
                     elseif ($line.IsInstalled) { "DarkGreen" }
@@ -645,20 +661,20 @@ function Show-TUISelectionMenu {
                         "winget" { "Winget" }
                         "store" { "MS Store" }
                         "github" { "GitHub" }
-                        "manual" { "수동" }
+                        "manual" { "Manual" }
                     }
                     
                     $nameText = "$($line.Name) ($srcText)"
-                    # 수동 설치 앱은 이미 감지되었더라도 [이미 설치됨] 라벨 표시 제외
+                    # Manual install apps never show the [already installed] label, even when detected
                     if ($line.IsInstalled -and $line.Source -ne "manual") {
-                        $nameText += " [이미 설치됨]"
+                        $nameText += " [Already installed]"
                     }
                     
                     if ($lineIdx -eq $cursorIndex) {
-                        Write-Host ("$prefix$check $nameText").PadRight(64) -ForegroundColor $fg -BackgroundColor DarkBlue
+                        Write-Host (Get-VisualPadRight "$prefix$check $nameText" 64) -ForegroundColor $fg -BackgroundColor DarkBlue
                     }
                     else {
-                        Write-Host ("$prefix$check $nameText").PadRight(64) -ForegroundColor $fg
+                        Write-Host (Get-VisualPadRight "$prefix$check $nameText" 64) -ForegroundColor $fg
                     }
                 }
             }
@@ -668,26 +684,26 @@ function Show-TUISelectionMenu {
         }
         Write-Host "----------------------------------------------------------------" -ForegroundColor Gray
         
-        # 스크롤 위치 표시기
+        # Scroll position indicator
         $appIndex = ($listLines[0..$cursorIndex] | Where-Object { -not $_.IsHeader }).Count
         $totalApps = ($listLines | Where-Object { -not $_.IsHeader }).Count
         $aboveCount = [Math]::Max(0, $scrollOffset)
         $belowCount = [Math]::Max(0, $listLines.Count - $scrollOffset - $pageSize)
-        $posText = " 위치: $appIndex / $totalApps"
+        $posText = " Position: $appIndex / $totalApps"
         if ($aboveCount -gt 0 -or $belowCount -gt 0) {
             $posText += "  (▲ ${aboveCount} ▼ ${belowCount})"
         }
-        Write-Host $posText.PadRight(64) -ForegroundColor DarkGray
+        Write-Host (Get-VisualPadRight $posText 64) -ForegroundColor DarkGray
 
-        # 색상 범례
-        Write-Host " ■" -ForegroundColor White -NoNewline; Write-Host " 미설치" -ForegroundColor DarkGray -NoNewline
-        Write-Host "  ■" -ForegroundColor DarkGreen -NoNewline; Write-Host " 설치됨" -ForegroundColor DarkGray -NoNewline
-        Write-Host "  ■" -ForegroundColor DarkYellow -NoNewline; Write-Host " 수동" -ForegroundColor DarkGray -NoNewline
-        Write-Host "  ■" -ForegroundColor Cyan -NoNewline; Write-Host " 포커스" -ForegroundColor DarkGray
+        # Color legend
+        Write-Host " ■" -ForegroundColor White -NoNewline; Write-Host " Not installed" -ForegroundColor DarkGray -NoNewline
+        Write-Host "  ■" -ForegroundColor DarkGreen -NoNewline; Write-Host " Installed" -ForegroundColor DarkGray -NoNewline
+        Write-Host "  ■" -ForegroundColor DarkYellow -NoNewline; Write-Host " Manual" -ForegroundColor DarkGray -NoNewline
+        Write-Host "  ■" -ForegroundColor Cyan -NoNewline; Write-Host " Focus" -ForegroundColor DarkGray
 
         $selectedCount = ($listLines | Where-Object { -not $_.IsHeader -and $_.Selected }).Count
         $totalCount = ($listLines | Where-Object { -not $_.IsHeader }).Count
-        Write-Host " 선택됨: $selectedCount / $totalCount 개 앱 목록 (전체 $totalCount 개)".PadRight(64) -ForegroundColor Green
+        Write-Host (Get-VisualPadRight " Selected: $selectedCount / $totalCount apps (total $totalCount)" 64) -ForegroundColor Green
 
         $keyInfo = [Console]::ReadKey($true)
         switch ($keyInfo.Key) {
@@ -701,7 +717,7 @@ function Show-TUISelectionMenu {
             }
             "Spacebar" {
                 if ($listLines[$cursorIndex].IsHeader) {
-                    # 하위 항목 일괄 토글
+                    # Toggle child items in bulk
                     $subApps = @()
                     for ($idx = $cursorIndex + 1; $idx -lt $listLines.Count; $idx++) {
                         if ($listLines[$idx].IsHeader) { break }
@@ -739,7 +755,7 @@ function Show-TUISelectionMenu {
                 $selItems = @($listLines | Where-Object { -not $_.IsHeader -and $_.Selected })
                 if ($selItems.Count -eq 0) {
                     Set-SafeCursor 0 ($pageSize + 7)
-                    Write-Host " [!] 선택된 앱이 없습니다. 설치하려면 최소 하나의 앱을 선택해 주세요.".PadRight(64) -ForegroundColor Yellow
+                    Write-Host (Get-VisualPadRight " [!] No apps are selected. Please select at least one app to install." 64) -ForegroundColor Yellow
                     Start-Sleep -Milliseconds 1200
                     continue
                 }
@@ -752,15 +768,15 @@ function Show-TUISelectionMenu {
                 $confirmWidth = 62
                 $lineBorder = "═" * $confirmWidth
                 Write-Host "╔$lineBorder╗" -ForegroundColor Cyan
-                Write-BorderLine "  설치 진행 확인" "Cyan" $confirmWidth
+                Write-BorderLine "  Confirm installation" "Cyan" $confirmWidth
                 Write-Host "╠$lineBorder╣" -ForegroundColor Cyan
-                Write-BorderLine "  선택된 앱: $($selItems.Count) 개" "White" $confirmWidth
+                Write-BorderLine "  Selected apps: $($selItems.Count)" "White" $confirmWidth
                 
                 $min = [Math]::Floor($estSec / 60)
                 $sec = $estSec % 60
-                $timeStr = if ($min -gt 0) { "${min}분 ${sec}초" } else { "${sec}초" }
-                Write-BorderLine "  예상 시간: 약 $timeStr" "White" $confirmWidth
-                Write-BorderLine "  [Enter] 설치 시작  [Esc] 선택 화면으로 복귀" "DarkGray" $confirmWidth
+                $timeStr = if ($min -gt 0) { "${min}m ${sec}s" } else { "${sec}s" }
+                Write-BorderLine "  Estimated time: about $timeStr" "White" $confirmWidth
+                Write-BorderLine "  [Enter] Start installation  [Esc] Return to selection screen" "DarkGray" $confirmWidth
                 Write-Host "╚$lineBorder╝" -ForegroundColor Cyan
 
                 $waitingConfirm = $true
@@ -798,7 +814,7 @@ function Show-TUISelectionMenu {
 #endregion
 
 # ================================================================
-#region ── 인터럽트 프롬프트 및 프로세스 실행 제어
+#region ── Interrupt prompt and process execution control
 # ================================================================
 function Show-InterruptPrompt {
     param(
@@ -819,14 +835,14 @@ function Show-InterruptPrompt {
 
     Write-Host ""
     Write-Host "  ┌$([string][char]0x2500 * $w)┐" -ForegroundColor Yellow
-    Write-Host (& $makeLine " [!] 설치 일시 중지됨 (Q / Esc 감지)") -ForegroundColor Yellow
-    Write-Host (& $makeLine " 현재 설치 중: $AppName") -ForegroundColor Yellow
+    Write-Host (& $makeLine " [!] Installation paused (Q / Esc detected)") -ForegroundColor Yellow
+    Write-Host (& $makeLine " Currently installing: $AppName") -ForegroundColor Yellow
     Write-Host (& $makeLine "") -ForegroundColor Yellow
-    Write-Host (& $makeLine "  1. 해당 항목 중지 (설치 강제 취소)") -ForegroundColor Yellow
-    Write-Host (& $makeLine "  2. 전체 설치 중지 (남은 목록 스킵)") -ForegroundColor Yellow
-    Write-Host (& $makeLine "  3. 계속 진행") -ForegroundColor Yellow
+    Write-Host (& $makeLine "  1. Stop this item (force-cancel the current install)") -ForegroundColor Yellow
+    Write-Host (& $makeLine "  2. Stop all installs (skip the remaining list)") -ForegroundColor Yellow
+    Write-Host (& $makeLine "  3. Continue") -ForegroundColor Yellow
     Write-Host "  └$([string][char]0x2500 * $w)┘" -ForegroundColor Yellow
-    Write-Host "  선택 (1-3): " -ForegroundColor Yellow -NoNewline
+    Write-Host "  Select (1-3): " -ForegroundColor Yellow -NoNewline
 
     $choice = $null
     while ($null -eq $choice) {
@@ -858,13 +874,13 @@ function Execute-ProcessWithInterrupt {
         [string]$ProgressPrefix = ""
     )
 
-    # stdin 가로채기 방지를 위해 Temp 폴더에 빈 입력 가상 파일 준비
+    # Prepare an empty stdin file in Temp to avoid input interception
     $emptyStdin = Join-Path $env:TEMP "empty-stdin.txt"
     if (-not (Test-Path $emptyStdin)) {
         " " | Out-File $emptyStdin -Force -Encoding ASCII
     }
 
-    # 해시테이블 splatting으로 파라미터 매핑 에러 해결 및 stdin 리다이렉션 추가
+    # Use hashtable splatting to avoid parameter-mapping errors and add stdin redirection
     $splat = @{
         FilePath              = $FilePath
         ArgumentList          = $ArgumentList
@@ -912,7 +928,7 @@ function Execute-ProcessWithInterrupt {
             }
         }
 
-        # 실시간 진행상황 파싱 및 최하단 고정 상태 표시줄(Status Bar)에 갱신 (300ms 주기)
+        # Parse live progress and update the fixed status bar at the bottom (300 ms interval)
         if ($RedirectStandardOutput -and $ProgressPrefix -and (Test-Path $RedirectStandardOutput)) {
             $now = Get-Date
             if (($now - $lastUpdate).TotalMilliseconds -ge 300) {
@@ -931,15 +947,15 @@ function Execute-ProcessWithInterrupt {
                     if ($rawStatus -and $rawStatus -ne $lastStatusText) {
                         $lastStatusText = $rawStatus
                         
-                        # 현재 커서 위치 백업
+                        # Save the current cursor position
                         $backLeft = [Console]::CursorLeft
                         $backTop = [Console]::CursorTop
                         
-                        # 콘솔 최하단 라인 결정
+                        # Determine the bottom console line
                         $statusBarTop = [Console]::WindowHeight - 1
                         if ($statusBarTop -lt 0) { $statusBarTop = 0 }
                         
-                        # 출력 문자열 빌드 및 가로폭 자르기
+                        # Build the output string and trim it to width
                         $statusBarLine = "  >> ${AppName}: $rawStatus"
                         $maxLen = [Console]::WindowWidth - 2
                         if ($maxLen -lt 10) { $maxLen = 60 }
@@ -947,11 +963,11 @@ function Execute-ProcessWithInterrupt {
                             $statusBarLine = $statusBarLine.Substring(0, $maxLen - 3) + "..."
                         }
                         
-                        # 상태바 영역에 갱신 출력
+                        # Redraw the status bar area
                         Set-SafeCursor 0 $statusBarTop
                         Write-Host ($statusBarLine.PadRight($maxLen)) -ForegroundColor Yellow -BackgroundColor Black -NoNewline
                         
-                        # 커서 원래 자리 복원
+                        # Restore the original cursor position
                         Set-SafeCursor $backLeft $backTop
                     }
                 }
@@ -960,7 +976,7 @@ function Execute-ProcessWithInterrupt {
         }
     }
 
-    # 프로세스 종료 후 상태 표시바 공백 클리어
+    # Clear the status bar after the process exits
     try {
         $backLeft = [Console]::CursorLeft
         $backTop = [Console]::CursorTop
@@ -986,7 +1002,7 @@ function Execute-ProcessWithInterrupt {
 #endregion
 
 # ================================================================
-#region ── TUI 출력 헬퍼
+#region ── TUI output helpers
 # ================================================================
 function Write-Header {
     param([int]$Total)
@@ -994,26 +1010,26 @@ function Write-Header {
     $w = 64
     $line = "═" * $w
     Write-Host "╔$line╗" -ForegroundColor Cyan
-    Write-BorderLine "  Windows 자동 설치 스크립트  v$SCRIPT_VERSION" "Cyan" $w
+    Write-BorderLine "  Windows Auto-Install Script  v$SCRIPT_VERSION" "Cyan" $w
     Write-Host "╠$line╣" -ForegroundColor Cyan
-    Write-BorderLine "  총 $Total 개 설치 진행 예정" "Yellow" $w
+    Write-BorderLine "  Preparing to install $Total apps" "Yellow" $w
     Write-Host "╚$line╝" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  ※ [Q] 또는 [Esc] 키를 누르면 다음 설치 프로세스부터 중단할 수 있습니다." -ForegroundColor DarkGray
+    Write-Host "  ※ Press [Q] or [Esc] to stop from the next install process onward." -ForegroundColor DarkGray
     Write-Host ""
 }
 
 function Get-FailReason {
     param([string]$Output)
-    if (-not $Output) { return '알 수 없는 오류' }
-    if ($Output -match 'No package found|패키지를 찾을 수 없') { return '패키지 없음' }
-    if ($Output -match 'No applicable installer') { return '호환 설치 파일 없음' }
-    if ($Output -match 'exit code[:\s]+(\d+)') { return "설치 오류 (종료 코드 $($Matches[1]))" }
-    if ($Output -match 'Installer failed|설치.*실패') { return '설치 프로그램 오류' }
-    if ($Output -match 'No applicable upgrade') { return '업그레이드 불가' }
-    if ($Output -match 'Failed in attempting to update') { return '소스 업데이트 실패' }
-    if ($Output -match 'download|다운로드.*실패') { return '다운로드 실패' }
-    return '알 수 없는 오류'
+    if (-not $Output) { return 'Unknown error' }
+    if ($Output -match 'No package found|패키지를 찾을 수 없') { return 'Package not found' }
+    if ($Output -match 'No applicable installer') { return 'No compatible installer found' }
+    if ($Output -match 'exit code[:\s]+(-?\d+)') { return "Installation error (exit code $($Matches[1]))" }
+    if ($Output -match 'Installer failed|installation.*실패') { return 'Installer error' }
+    if ($Output -match 'No applicable upgrade') { return 'Upgrade unavailable' }
+    if ($Output -match 'Failed in attempting to update') { return 'Source update failed' }
+    if ($Output -match 'download|다운로드.*실패') { return 'Download failed' }
+    return 'Unknown error'
 }
 
 function Write-SectionBar {
@@ -1025,7 +1041,7 @@ function Write-SectionBar {
 #endregion
 
 # ================================================================
-#region ── GitHub 릴리즈 설치
+#region ── GitHub release installation
 # ================================================================
 function Install-FromGitHub {
     param([string]$Name, [hashtable]$Cfg, [string]$ProgressPrefix = "")
@@ -1033,7 +1049,7 @@ function Install-FromGitHub {
     try {
         Write-Log -Level "INFO" -Message "GitHub release installation started for $Name." -Detail "API: $($Cfg.Api)"
         
-        # GITHUB_TOKEN 환경 변수가 있으면 인증 요청 헤더 추가 (무인화 속도 제한 회피)
+        # Add an authorization header when GITHUB_TOKEN is set (avoids unauthenticated rate limits)
         $headers = @{ "User-Agent" = "AutoInstall"; "Accept" = "application/vnd.github+json" }
         if ($env:GITHUB_TOKEN) {
             $headers["Authorization"] = "token $env:GITHUB_TOKEN"
@@ -1044,7 +1060,7 @@ function Install-FromGitHub {
         $asset = $rel.assets | Where-Object { $_.name -like $Cfg.Filter } | Select-Object -First 1
         if (-not $asset) {
             Write-Log -Level "ERROR" -Message "No matching GitHub release asset found." -Detail "Filter: $($Cfg.Filter)"
-            return @{ Ok = $false; Reason = '릴리즈 자산 없음' }
+            return @{ Ok = $false; Reason = 'No release asset found' }
         }
         
         $tmp = Join-Path $env:TEMP $asset.name
@@ -1052,18 +1068,18 @@ function Install-FromGitHub {
         
         $ProgressPreference = 'SilentlyContinue'
         $downloadCmd = "Invoke-WebRequest -Uri '$($asset.browser_download_url)' -OutFile '$tmp' -UseBasicParsing"
-        $res = Execute-ProcessWithInterrupt -FilePath "powershell" -ArgumentList "-NoProfile -Command $downloadCmd" -AppName "$Name 다운로드" -ProgressPrefix $ProgressPrefix
+        $res = Execute-ProcessWithInterrupt -FilePath "powershell" -ArgumentList "-NoProfile -Command $downloadCmd" -AppName "$Name download" -ProgressPrefix $ProgressPrefix
         $ProgressPreference = 'Continue'
         
         if ($res.Interrupted -eq "Current") {
-            return @{ Ok = $false; Reason = "사용자 취소 (현재 항목 중지)"; Interrupted = "Current" }
+            return @{ Ok = $false; Reason = "Canceled by user (current item stopped)"; Interrupted = "Current" }
         }
         elseif ($res.Interrupted -eq "All") {
-            return @{ Ok = $false; Reason = "사용자 취소 (전체 중지)"; Interrupted = "All" }
+            return @{ Ok = $false; Reason = "Canceled by user (all installs stopped)"; Interrupted = "All" }
         }
         
         if ($res.ExitCode -ne 0) {
-            return @{ Ok = $false; Reason = "다운로드 실패 (종료 코드 $($res.ExitCode))"; Interrupted = "None" }
+            return @{ Ok = $false; Reason = "Download failed (exit code $($res.ExitCode))"; Interrupted = "None" }
         }
         
         $a = if ($Cfg.Args) { $Cfg.Args } else { "" }
@@ -1077,19 +1093,19 @@ function Install-FromGitHub {
         $interrupted = $res.Interrupted
         
         if ($interrupted -eq "Current") {
-            return @{ Ok = $false; Reason = "사용자 취소 (현재 항목 중지)"; Interrupted = "Current" }
+            return @{ Ok = $false; Reason = "Canceled by user (current item stopped)"; Interrupted = "Current" }
         }
         elseif ($interrupted -eq "All") {
-            return @{ Ok = $false; Reason = "사용자 취소 (전체 중지)"; Interrupted = "All" }
+            return @{ Ok = $false; Reason = "Canceled by user (all installs stopped)"; Interrupted = "All" }
         }
         
         if ($res.Error) {
-            return @{ Ok = $false; Reason = "설치 프로그램 실행 실패: $($res.Error)" }
+            return @{ Ok = $false; Reason = "Installer execution failed: $($res.Error)" }
         }
 
         Write-Log -Level "INFO" -Message "GitHub installer execution completed." -Detail "ExitCode: $exit"
         if ($exit -eq 0) { return @{ Ok = $true; Reason = $null; Interrupted = "None" } }
-        return @{ Ok = $false; Reason = "설치 오류 (종료 코드 $exit)"; Interrupted = "None" }
+        return @{ Ok = $false; Reason = "Installation error (exit code $exit)"; Interrupted = "None" }
     }
     catch {
         $err = $_.Exception.Message -replace "`r`n", " "
@@ -1106,7 +1122,7 @@ function Install-FromGitHub {
 
 
 # ================================================================
-#region ── Winget 설치 실행
+#region ── Winget installation execution
 # ================================================================
 function Invoke-Winget {
     param([string]$Id, [string]$AppName, [string]$Extra = "", [string]$ProgressPrefix = "")
@@ -1129,17 +1145,17 @@ function Invoke-Winget {
     Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
     
     if ($interrupted -eq "Current") {
-        return @{ Ok = $false; Reason = "사용자 취소 (현재 항목 중지)"; Interrupted = "Current" }
+        return @{ Ok = $false; Reason = "Canceled by user (current item stopped)"; Interrupted = "Current" }
     }
     elseif ($interrupted -eq "All") {
-        return @{ Ok = $false; Reason = "사용자 취소 (전체 중지)"; Interrupted = "All" }
+        return @{ Ok = $false; Reason = "Canceled by user (all installs stopped)"; Interrupted = "All" }
     }
     
     if ($res.Error) {
-        return @{ Ok = $false; Reason = "프로세스 실행 실패: $($res.Error)" }
+        return @{ Ok = $false; Reason = "Process execution failed: $($res.Error)" }
     }
 
-    # 성공조건 체크 (0, 이미 설치됨(-1978335189 / 0x8A15005B / 2317112411), 재부팅 요구(3010, 1641))
+    # Success-condition check (0, already installed (-1978335189 / 0x8A15005B / 2317112411), reboot required (3010, 1641))
     $WINGET_ALREADY_INSTALLED = $script:EXIT_ALREADY_INSTALLED
     $ERROR_SUCCESS_REBOOT_REQUIRED = $script:EXIT_REBOOT_REQUIRED
     $ERROR_SUCCESS_REBOOT_INITIATED = $script:EXIT_REBOOT_INITIATED
@@ -1153,7 +1169,7 @@ function Invoke-Winget {
 #endregion
 
 # ================================================================
-#region ── 설치 실행
+#region ── Installation execution
 # ================================================================
 function Invoke-Install {
     param([string[]]$Selected)
@@ -1174,7 +1190,7 @@ function Invoke-Install {
         $name = $Selected[$i]
         $namePad = $name + (" " * [Math]::Max(0, 30 - (Get-VisualWidth $name)))
         
-        # 루프 진입 시점에 이미 취소 키가 입력되었는지 검사
+        # Check whether a cancel key was already pressed when entering the loop
         if ([Console]::KeyAvailable) {
             $key = [Console]::ReadKey($true)
             if ($key.Key -eq [ConsoleKey]::Escape -or $key.Key -eq [ConsoleKey]::Q) {
@@ -1182,7 +1198,7 @@ function Invoke-Install {
             }
         }
         
-        # 유저가 중단을 요청한 상태라면 남은 앱들은 모두 스킵 처리
+        # Skip the remaining apps if the user requested cancellation
         if ($cancelled) {
             Write-Log -Level "DEBUG" -Message "Skipping $name due to cancel state."
             $skipped.Add($name)
@@ -1204,7 +1220,7 @@ function Invoke-Install {
 
         $prefix = "[{0,$pad}/{1}]" -f $idx, $total
 
-        # 이미 설치되어 있는지 사전에 확인 (수동 설치는 강제 가이드를 위해 기설치 스킵 제외)
+        # Check whether the app is already installed (manual installs are not skipped so the user can follow the required setup guide)
         $isAlreadyInstalled = $false
         if ($type -ne "manual") {
             $detectId = if ($src.id) { $src.id } else { $name }
@@ -1215,21 +1231,21 @@ function Invoke-Install {
 
         if ($isAlreadyInstalled) {
             Write-Log -Level "INFO" -Message "$name is already installed. Skipping installer run."
-            $resultLine = "  $prefix  $namePad ◽ 이미 설치됨"
-            Write-Host $resultLine.PadRight(64) -ForegroundColor DarkGray
+            $resultLine = "  $prefix  $namePad ◽ Already installed"
+            Write-Host (Get-VisualPadRight $resultLine 64) -ForegroundColor DarkGray
             $done.Add([PSCustomObject]@{ Name = $name; Time = 0; IsAlreadyInstalled = $true })
             continue
         }
 
         if ($type -eq "manual") {
             Write-Log -Level "INFO" -Message "$name marked for manual setup."
-            Write-Host "  $prefix  $namePad 수동 등록 완료" -ForegroundColor Yellow
+            Write-Host "  $prefix  $namePad Manual setup recorded" -ForegroundColor Yellow
             $manuals.Add([PSCustomObject]@{ Name = $name; Url = $src.url; Note = $src.note })
             continue
         }
 
         Write-Log -Level "INFO" -Message "Installing $name ($type)"
-        Write-Host "  $prefix  $namePad 설치 중..." -ForegroundColor DarkGray -NoNewline
+        Write-Host "  $prefix  $namePad Installing..." -ForegroundColor DarkGray -NoNewline
         $start = Get-Date
 
         $res = switch ($type) {
@@ -1243,14 +1259,14 @@ function Invoke-Install {
         
         $ok = $res.Ok
         
-        # Interrupted 상태 처리
+        # Handle interrupted state
         if ($res.Interrupted -eq "Current") {
             $ok = $false
-            $res.Reason = "사용자 요청으로 설치 중단(해당 항목)"
+            $res.Reason = "Canceled by user (current item)"
         }
         elseif ($res.Interrupted -eq "All") {
             $ok = $false
-            $res.Reason = "사용자 요청으로 설치 중단(전체 중지)"
+            $res.Reason = "Canceled by user (all installs)"
             $cancelled = $true
         }
         
@@ -1258,8 +1274,8 @@ function Invoke-Install {
         $sym = if ($ok) { "✅" } else { "❌" }
         
         [Console]::Write("`r")
-        $resultLine = "  $prefix  $namePad $sym ($duration초 소요)"
-        Write-Host $resultLine.PadRight(64) -ForegroundColor $col
+        $resultLine = "  $prefix  $namePad $sym ($duration s elapsed)"
+        Write-Host (Get-VisualPadRight $resultLine 64) -ForegroundColor $col
         
         if (-not $ok) {
             Write-Log -Level "ERROR" -Message "Installation failed for $name." -Detail $res.Reason
@@ -1269,8 +1285,13 @@ function Invoke-Install {
         else {
             Write-Log -Level "INFO" -Message "Installation succeeded for $name in $duration seconds."
             $done.Add([PSCustomObject]@{ Name = $name; Time = $duration; IsAlreadyInstalled = $false })
-            Refresh-EnvironmentPaths
         }
+    }
+
+    # Refresh PATH once after the batch if at least one app was installed (avoids repeated refreshes and losing session PATH entries)
+    $newlyInstalled = @($done | Where-Object { -not $_.IsAlreadyInstalled }).Count
+    if ($newlyInstalled -gt 0) {
+        Refresh-EnvironmentPaths
     }
 
     Write-Log -Level "INFO" -Message "Installation loop completed." -Detail "Success: $($done.Count) | Failed: $($failed.Count) | Skipped: $($skipped.Count)"
@@ -1279,71 +1300,71 @@ function Invoke-Install {
 #endregion
 
 # ================================================================
-#region ── 결과 요약
+#region ── Results summary
 # ================================================================
 function Show-Summary {
     param($Result)
     $w = 64; $line = "═" * $w
     Write-Host ""
     Write-Host "╔$line╗" -ForegroundColor Cyan
-    Write-BorderLine "  설치 결과 요약" "Cyan" $w
+    Write-BorderLine "  Installation summary" "Cyan" $w
     Write-Host "╠$line╣" -ForegroundColor Cyan
     
     $totalDoneTime = 0
     foreach ($d in $Result.Done) { $totalDoneTime += $d.Time }
     
-    Write-BorderLine "  ✅ 성공: $($Result.Done.Count) 개 (총 $totalDoneTime 초 소요)" "Green" $w
+    Write-BorderLine "  ✅ Success: $($Result.Done.Count) apps (total $totalDoneTime s elapsed)" "Green" $w
     
     if ($Result.Failed.Count -gt 0) {
         $totalFailTime = 0
         foreach ($f in $Result.Failed) { $totalFailTime += $f.Time }
-        Write-BorderLine "  ❌ 실패: $($Result.Failed.Count) 개" "Red" $w
+        Write-BorderLine "  ❌ Failed: $($Result.Failed.Count) apps" "Red" $w
     }
     Write-Host "╚$line╝" -ForegroundColor Cyan
  
-    # 1. 성공 리스트 출력
+    # 1. Print the success list
     if ($Result.Done.Count -gt 0) {
         Write-Host ""
-        Write-Host "  ── 성공 목록 " -ForegroundColor Green -NoNewline
+        Write-Host "  ── Success list " -ForegroundColor Green -NoNewline
         Write-Host ("─" * 48) -ForegroundColor DarkGreen
         foreach ($s in $Result.Done) {
             $namePad = $s.Name + (" " * [Math]::Max(0, 30 - (Get-VisualWidth $s.Name)))
             Write-Host "  ✅ $namePad" -ForegroundColor Green -NoNewline
             if ($s.IsAlreadyInstalled) {
-                Write-Host "(이미 설치됨)" -ForegroundColor DarkGray
+                Write-Host "(Already installed)" -ForegroundColor DarkGray
             }
             else {
-                Write-Host "($($s.Time)초 소요)" -ForegroundColor Gray
+                Write-Host "($($s.Time)s elapsed)" -ForegroundColor Gray
             }
         }
     }
 
-    # 2. 실패 리스트 출력
+    # 2. Print the failure list
     if ($Result.Failed.Count -gt 0) {
         Write-Host ""
-        Write-Host "  ── 실패 목록 " -ForegroundColor Red -NoNewline
+        Write-Host "  ── Failure list " -ForegroundColor Red -NoNewline
         Write-Host ("─" * 48) -ForegroundColor DarkRed
         foreach ($f in $Result.Failed) {
             $namePad = $f.Name + (" " * [Math]::Max(0, 30 - (Get-VisualWidth $f.Name)))
             Write-Host "  ❌ $namePad" -ForegroundColor Red -NoNewline
-            Write-Host "→  $($f.Reason) ($($f.Time)초 소요)" -ForegroundColor DarkRed
+            Write-Host "→  $($f.Reason) ($($f.Time)s elapsed)" -ForegroundColor DarkRed
         }
     }
 
-    # 3. 중단/스킵 리스트 출력
+    # 3. Print the canceled/skipped list
     if ($Result.Skipped.Count -gt 0) {
         Write-Host ""
-        Write-Host "  ── 중단/스킵 목록 " -ForegroundColor Gray -NoNewline
+        Write-Host "  ── Canceled/Skipped list " -ForegroundColor Gray -NoNewline
         Write-Host ("─" * 46) -ForegroundColor DarkGray
         foreach ($s in $Result.Skipped) {
-            Write-Host "  ◽ $s (중단됨)" -ForegroundColor Gray
+            Write-Host "  ◽ $s (canceled)" -ForegroundColor Gray
         }
     }
 
-    # 4. 선택된 수동 설치 대상 처리
+    # 4. Handle selected manual setup targets
     if ($Result.Manuals.Count -gt 0) {
         Write-Host ""
-        Write-Host "  ── 수동 설치 필요 (선택됨) " -ForegroundColor Yellow -NoNewline
+        Write-Host "  ── Manual setup required (selected) " -ForegroundColor Yellow -NoNewline
         Write-Host ("─" * 36) -ForegroundColor DarkYellow
         foreach ($m in $Result.Manuals) {
             if ($m.Url) {
@@ -1357,16 +1378,16 @@ function Show-Summary {
         }
     }
     
-    # 상세 로그 경로 출력
+    # Print the detailed log path
     Write-Host ""
-    Write-Host "  ※ 상세 설치 로그가 다음 경로에 저장되었습니다: " -ForegroundColor DarkGray
+    Write-Host "  Detailed installation logs were saved to: " -ForegroundColor DarkGray
     Write-Host "     $LOG_FILE" -ForegroundColor Cyan
     Write-Host ""
 }
 #endregion
 
 # ================================================================
-#region ── 진입점
+#region ── Entry point
 # ================================================================
 Scan-InstalledApps
 
@@ -1374,13 +1395,13 @@ $scriptRunning = $true
 while ($scriptRunning) {
     $sel = Show-TUISelectionMenu
     if ($null -eq $sel) {
-        Write-Host "취소되었습니다. 프로그램을 종료합니다." -ForegroundColor Gray
+        Write-Host "Canceled. Exiting the program." -ForegroundColor Gray
         $scriptRunning = $false
         break
     }
     
     if ($sel.Count -eq 0) {
-        Write-Host "선택된 앱이 없습니다. 다시 선택해 주세요." -ForegroundColor Yellow
+        Write-Host "No apps were selected. Please choose again." -ForegroundColor Yellow
         Start-Sleep -Seconds 1.5
         continue
     }
@@ -1390,7 +1411,7 @@ while ($scriptRunning) {
     $result = Invoke-Install -Selected $sel
     Show-Summary -Result $result
 
-    # 선택된 수동 웹사이트만 브라우저로 띄우기
+    # Open only the selected manual websites in the browser
     $manualOpenCount = 0
     foreach ($m in $result.Manuals) {
         if ($m.Url) {
@@ -1401,13 +1422,13 @@ while ($scriptRunning) {
     }
 
     if ($manualOpenCount -gt 0) {
-        Write-Host "  웹 사이트 $manualOpenCount 개가 브라우저에 열렸습니다." -ForegroundColor DarkGray
+        Write-Host "  $manualOpenCount website(s) were opened in the browser." -ForegroundColor DarkGray
     }
 
     Write-Host "  Press Enter to return to main menu..." -ForegroundColor DarkGray
     [Console]::ReadLine() | Out-Null
     
-    # 복귀 전 기설치 목록 최신화 재스캔
+    # Refresh the installed-app list before returning
     Scan-InstalledApps
 }
 #endregion

@@ -1,4 +1,4 @@
-# Windows 자동 설치 도구 (v0.0.9)
+# Windows 자동 설치 도구 (v0.0.10)
 
 본 스크립트는 윈도우 환경 구축 시 필요한 대량의 소프트웨어를 TUI(Text User Interface) 상에서 인터랙티브하게 선택하여 한 번에 무음(Silent) 설치할 수 있도록 돕는 PowerShell 자동화 도구입니다.
 
@@ -35,7 +35,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 - `A` : 모든 항목 일괄 선택
 - `N` : 모든 항목 일괄 해제
 - `Enter` : 선택된 패키지들의 무음 설치 루프 실행
-- `Esc` : 스크립트 실행 즉시 취소 및 탈출
+- `Esc` : 선택 화면에서는 프로그램 종료 / 설치 확인창에서는 선택 화면으로 복귀
 
 ---
 
