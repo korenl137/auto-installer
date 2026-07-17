@@ -18,3 +18,7 @@ Desktop.ini
 # AI Agent working directories
 .claude/
 .agents/
+
+# 작업용 산출물 (진단/분석 보고서 등, 소스가 아닌 산출 문서)
+진단보고서_*.docx
+*.diagnostic-report.docx

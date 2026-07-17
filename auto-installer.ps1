@@ -1,5 +1,5 @@
 # ================================================================
-# Windows Auto-Install Script v0.0.11 (TUI Refactored with Advanced Log Levels)
+# Windows Auto-Install Script v0.1.0 (TUI Refactored with Advanced Log Levels)
 # This program was co-developed with the help of an AI coding assistant.
 # ================================================================
 
@@ -12,9 +12,14 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 #endregion
 
 # Logging folder and file definitions (logs under the script root folder)
-$SCRIPT_VERSION = "0.0.11"
+$SCRIPT_VERSION = "0.1.0"
 
 # Winget exit code constants
+# Source: winget-cli (Microsoft.WinGet.Client) public error codes and standard Windows system exit codes.
+# Re-verify these when winget has a major version update (last verified: 2026-07-17, against v0.0.11 behavior).
+#   -1978335189 (0x8A15005B, APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED): returned when re-attempting to install an already-installed package
+#   3010          (ERROR_SUCCESS_REBOOT_REQUIRED): standard Windows code; install succeeded but a reboot is required
+#   1641          (ERROR_SUCCESS_REBOOT_INITIATED): install succeeded and the installer itself triggered a reboot
 $script:EXIT_ALREADY_INSTALLED = -1978335189
 $script:EXIT_REBOOT_REQUIRED = 3010
 $script:EXIT_REBOOT_INITIATED = 1641
@@ -28,22 +33,16 @@ $LOG_FILE = Join-Path $LOG_DIR "auto-install-log-$timestamp.txt"
 "=== Windows Auto-Install v$SCRIPT_VERSION Log ===" | Out-File $LOG_FILE -Force -Encoding UTF8
 "Started at: $(Get-Date)" | Out-File $LOG_FILE -Append -Encoding UTF8
 
-# Logging helper with level support
-function Write-Log {
-    param(
-        [ValidateSet("INFO", "DEBUG", "WARN", "ERROR")]
-        [string]$Level = "INFO",
-        [string]$Message,
-        [string]$Detail = ""
-    )
-    $time = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    $logLine = "[ $time ] [ $Level ] $Message"
-    $logLine | Out-File $LOG_FILE -Append -Encoding UTF8
-    if ($Detail) {
-        $indentedDetail = ($Detail -split "`r?`n" | ForEach-Object { "    $_" }) -join "`r`n"
-        $indentedDetail | Out-File $LOG_FILE -Append -Encoding UTF8
-    }
+# Load shared core functions (logging / visual-width helpers / install detection / error classification).
+# Pure logic that does not depend on Windows-only APIs lives in its own file so it can be unit-tested
+# independently with Pester (see tests/Core.Tests.ps1).
+$CORE_MODULE_PATH = Join-Path $PSScriptRoot "AutoInstaller.Core.ps1"
+if (-not (Test-Path $CORE_MODULE_PATH)) {
+    Write-Host "Error: could not find the core module file (AutoInstaller.Core.ps1). It must sit next to the script." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
 }
+. $CORE_MODULE_PATH
 
 Write-Log -Level "INFO" -Message "Administrator privileges confirmed."
 
@@ -58,32 +57,7 @@ if (Get-Command chcp -ErrorAction SilentlyContinue) {
 Write-Log -Level "DEBUG" -Message "Setting SecurityProtocol to TLS 1.2."
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Calculate display width for CJK and other full-width characters
-function Get-VisualWidth {
-    param([string]$String)
-    if (-not $String) { return 0 }
-    $width = 0
-    $enumerator = [System.Globalization.StringInfo]::GetTextElementEnumerator($String)
-    while ($enumerator.MoveNext()) {
-        $element = $enumerator.GetTextElement()
-        $firstChar = $element[0]
-        if ([System.Char]::IsSurrogate($firstChar) -or [int]$firstChar -gt 127) {
-            $width += 2
-        }
-        else {
-            $width += 1
-        }
-    }
-    return $width
-}
-
-# Pad strings to a target visual width for full-width characters (.PadRight counts characters and breaks CJK alignment)
-function Get-VisualPadRight {
-    param([string]$String, [int]$Width = 64)
-    $visualWidth = Get-VisualWidth $String
-    $padNeeded = $Width - $visualWidth
-    return $String + (" " * [Math]::Max(0, $padNeeded))
-}
+# (Get-VisualWidth and Get-VisualPadRight now live in AutoInstaller.Core.ps1)
 
 # Box-line output helper for CJK-friendly rendering
 function Write-BorderLine {
@@ -182,72 +156,7 @@ else {
 $script:installedIds = @{}
 $script:installedNames = @{}
 
-function Get-VisualSubstring {
-    param(
-        [string]$String,
-        [int]$StartWidth,
-        [int]$LengthWidth
-    )
-    if (-not $String) { return "" }
-    
-    $currentVisualWidth = 0
-    $startIndex = -1
-    $endIndex = -1
-    
-    $enumerator = [System.Globalization.StringInfo]::GetTextElementEnumerator($String)
-    $charOffset = 0
-    while ($enumerator.MoveNext()) {
-        $element = $enumerator.GetTextElement()
-        $elementLen = $element.Length
-        $firstChar = $element[0]
-        
-        $charWidth = if ([System.Char]::IsSurrogate($firstChar) -or [int]$firstChar -gt 127) { 2 } else { 1 }
-        
-        if ($startIndex -eq -1 -and $currentVisualWidth -ge $StartWidth) {
-            $startIndex = $charOffset
-        }
-        
-        $currentVisualWidth += $charWidth
-        $charOffset += $elementLen
-        
-        if ($startIndex -ne -1 -and $currentVisualWidth -gt ($StartWidth + $LengthWidth)) {
-            $endIndex = $charOffset - $elementLen
-            break
-        }
-    }
-    
-    if ($startIndex -eq -1) { return "" }
-    if ($endIndex -eq -1) { $endIndex = $String.Length }
-    
-    $len = $endIndex - $startIndex
-    if ($len -le 0) { return "" }
-    
-    return $String.Substring($startIndex, $len).Trim()
-}
-
-function Get-SafeContentTail {
-    param(
-        [string]$Path,
-        [int]$TailCount = 5
-    )
-    if (-not (Test-Path $Path)) { return @() }
-    try {
-        $fileStream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-        $reader = New-Object System.IO.StreamReader($fileStream, [System.Text.Encoding]::UTF8)
-        $lines = [System.Collections.Generic.List[string]]::new()
-        while (($line = $reader.ReadLine()) -ne $null) {
-            $lines.Add($line)
-        }
-        $reader.Close()
-        $fileStream.Close()
-        
-        $startIdx = [Math]::Max(0, $lines.Count - $TailCount)
-        return $lines.GetRange($startIdx, $lines.Count - $startIdx)
-    }
-    catch {
-        return @()
-    }
-}
+# (Get-VisualSubstring and Get-SafeContentTail now live in AutoInstaller.Core.ps1)
 
 function Scan-InstalledApps {
     Write-Log -Level "INFO" -Message "Querying installed apps using winget list."
@@ -325,181 +234,60 @@ function Scan-InstalledApps {
     }
 }
 
-# Smart installed-app matching helper (supports version and minor-series prefix matches)
-function Test-IsAppInstalled {
-    param(
-        [string]$AppId
-    )
-    if (-not $AppId -or -not $script:installedIds) { return $false }
-    $normalizedId = $AppId.ToLower()
-
-
-    # 1. Check exact match first
-    if ($script:installedIds.ContainsKey($normalizedId)) {
-        return $true
-    }
-
-    # 2. Check custom mappings (alternate ID or display name)
-    if ($script:APP_CUSTOM_MAPPINGS.ContainsKey($normalizedId)) {
-        foreach ($alt in $script:APP_CUSTOM_MAPPINGS[$normalizedId]) {
-            # ID match
-            if ($script:installedIds.ContainsKey($alt)) {
-                return $true
-            }
-            # Name match (including bidirectional partial match)
-            foreach ($instName in $script:installedNames.Keys) {
-                if ($instName.Contains($alt) -or $alt.Contains($instName)) {
-                    return $true
-                }
-            }
-        }
-    }
-
-    # 3. Prefix matching for representative packages with active minor-version branching
-    if ($normalizedId -match '^(python\.python\.3|microsoft\.visualstudiocode|git\.git)') {
-        $prefix = $Matches[1]
-        foreach ($instId in $script:installedIds.Keys) {
-            if ($instId.StartsWith($prefix)) {
-                return $true
-            }
-        }
-    }
-
-    # 4. Generic two-segment prefix match (for example, Google.Chrome)
-    #    Require a segment boundary: prevents false positives such as matching notion.notioncalendar for notion.notion
-    $parts = $normalizedId -split '\.'
-    if ($parts.Count -ge 2) {
-        $baseId = "$($parts[0]).$($parts[1])"
-        foreach ($instId in $script:installedIds.Keys) {
-            if ($instId -eq $baseId -or $instId.StartsWith("$baseId.")) {
-                return $true
-            }
-        }
-    }
-
-    # 5. Additional name-based fallback for GitHub apps and manually installed apps without IDs
-    #    Partial matches on very short tokens cause false positives, so allow them only for tokens 5+ characters long
-    foreach ($instName in $script:installedNames.Keys) {
-        if ($instName -eq $normalizedId) {
-            return $true
-        }
-        if ($normalizedId.Length -ge 5 -and $instName.Contains($normalizedId)) {
-            return $true
-        }
-        if ($instName.Length -ge 5 -and $normalizedId.Contains($instName)) {
-            return $true
-        }
-    }
-
-    # 6. Malware Zero special folder-path detection rule (portable format support)
-    if ($normalizedId -eq "malware zero") {
-        $desktop = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
-        $downloads = [System.IO.Path]::Combine($env:USERPROFILE, "Downloads")
-        $paths = @(
-            "C:\mzk",
-            (Join-Path $desktop "mzk"),
-            (Join-Path $downloads "mzk")
-        )
-        foreach ($p in $paths) {
-            if (Test-Path $p) {
-                return $true
-            }
-        }
-    }
-
-    return $false
-}
+# (Test-IsAppInstalled now lives in AutoInstaller.Core.ps1, with WARN logging added around its
+#  heuristic fallback stages so false-positive matches can be spotted after the fact.)
 
 # ================================================================
-#region ── App catalog
+#region ── App catalog (loaded from catalog.json)
 # ================================================================
-$WINGET = [ordered]@{
-    "Google Chrome"       = @{ id = "Google.Chrome"; sec = 60; cat = "Browser / AI" }
-    "Claude AI"           = @{ id = "Anthropic.Claude"; sec = 30; cat = "Browser / AI" }
-    "Antigravity"         = @{ id = "Google.Antigravity"; sec = 45; cat = "Browser / AI" }
-    "Comet (Perplexity)"  = @{ id = "Perplexity.Comet"; sec = 90; cat = "Browser / AI" }
-    "Git"                 = @{ id = "Git.Git"; sec = 45; cat = "Development" }
-    "VS Code"             = @{ id = "Microsoft.VisualStudioCode"; sec = 60; cat = "Development" }
-    "Python 3"            = @{ id = "Python.Python.3.13"; sec = 60; cat = "Development" }
-    "PowerShell 7"        = @{ id = "Microsoft.PowerShell"; sec = 60; cat = "Development" }
-    "PuTTY"               = @{ id = "PuTTY.PuTTY"; sec = 15; cat = "Development" }
-    "DeepL"               = @{ id = "DeepL.DeepL"; sec = 40; cat = "AI / Productivity" }
-    "Notion"              = @{ id = "Notion.Notion"; sec = 60; cat = "AI / Productivity" }
-    "Notion Calendar"     = @{ id = "Notion.NotionCalendar"; sec = 60; cat = "AI / Productivity" }
-    "Obsidian"            = @{ id = "Obsidian.Obsidian"; sec = 45; cat = "AI / Productivity" }
-    "Miro"                = @{ id = "Miro.Miro"; sec = 60; cat = "AI / Productivity" }
-    "Zotero"              = @{ id = "DigitalScholar.Zotero"; sec = 60; cat = "AI / Productivity" }
-    "Devin Desktop"       = @{ id = "CognitionAI.DevinDesktop"; sec = 60; cat = "AI / Productivity" }
-    "Discord"             = @{ id = "Discord.Discord"; sec = 60; cat = "Communication" }
-    "KakaoTalk"           = @{ id = "Kakao.KakaoTalk"; sec = 45; cat = "Communication" }
-    "Slack"               = @{ id = "SlackTechnologies.Slack"; sec = 60; cat = "Communication" }
-    "VLC"                 = @{ id = "VideoLAN.VLC"; sec = 60; cat = "Media / Creative" }
-    "GIMP"                = @{ id = "GIMP.GIMP"; sec = 180; cat = "Media / Creative" }
-    "AIMP"                = @{ id = "AIMP.AIMP"; sec = 25; cat = "Media / Creative" }
-    "Everything"          = @{ id = "voidtools.Everything"; sec = 15; cat = "Utility" }
-    "PowerToys"           = @{ id = "Microsoft.PowerToys"; sec = 120; cat = "Utility" }
-    "Winaero Tweaker"     = @{ id = "winaero.tweaker"; sec = 30; cat = "Utility" }
-    "TreeSize Free"       = @{ id = "JAMSoftware.TreeSize.Free"; sec = 30; cat = "Utility" }
-    "Geek Uninstaller"    = @{ id = "GeekUninstaller.GeekUninstaller"; sec = 15; cat = "Utility" }
-    "Bandizip"            = @{ id = "Bandisoft.Bandizip"; sec = 30; cat = "Utility" }
-    "Intel DSA"           = @{ id = "Intel.IntelDriverAndSupportAssistant"; sec = 60; cat = "System / Hardware" }
-    "MSI Afterburner"     = @{ id = "Guru3D.Afterburner"; sec = 40; cat = "System / Hardware" }
-    "Logi Options+"       = @{ id = "Logitech.OptionsPlus"; sec = 60; cat = "System / Hardware" }
-    "Kensington Konnect"  = @{ id = "Kensington.KensingtonKonnect"; sec = 30; cat = "System / Hardware" }
-    "Dygma Bazecor"       = @{ id = "DygmaLabs.Bazecor"; sec = 30; cat = "System / Hardware" }
-    "LittleBigMouse"      = @{ id = "mgth.LittleBigMouse"; sec = 15; cat = "System / Hardware" }
-    "AnyDesk"             = @{ id = "AnyDesk.AnyDesk"; sec = 30; cat = "Remote / Network" }
-    "Parsec"              = @{ id = "Parsec.Parsec"; sec = 60; cat = "Remote / Network" }
-    "NordVPN"             = @{ id = "NordSecurity.NordVPN"; sec = 60; cat = "Remote / Network" }
-    "RaiDrive"            = @{ id = "OpenBoxLab.RaiDrive"; sec = 40; cat = "Remote / Network" }
-    "Google Drive"        = @{ id = "Google.GoogleDrive"; sec = 90; cat = "Cloud / File" }
-    "Quick Share"         = @{ id = "Google.QuickShare"; sec = 40; cat = "Cloud / File" }
-    "Raspberry Pi Imager" = @{ id = "RaspberryPiFoundation.RaspberryPiImager"; sec = 60; cat = "Cloud / File" }
-    "Steam"               = @{ id = "Valve.Steam"; sec = 60; cat = "Entertainment" }
+$CATALOG_PATH = Join-Path $PSScriptRoot "catalog.json"
+if (-not (Test-Path $CATALOG_PATH)) {
+    Write-Log -Level "ERROR" -Message "Could not find the catalog file: $CATALOG_PATH"
+    Write-Host "Error: catalog.json must sit next to the script." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
 }
 
-$STORE = [ordered]@{
-    "TranslucentTB"      = @{ id = "9PF4KZ2VN4W9"; sec = 15; cat = "Utility" }
-    "Windows PC Manager" = @{ id = "9PM860492SZD"; sec = 30; cat = "Utility" }
-    "Samsung Magician"   = @{ id = "XPDDT99J9GKB5C"; sec = 60; cat = "System / Hardware" }
+try {
+    $catalogRaw = Get-Content -Path $CATALOG_PATH -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+catch {
+    Write-Log -Level "ERROR" -Message "Failed to parse catalog.json." -Detail $_.Exception.Message
+    Write-Host "Error: catalog.json is not valid JSON." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
 }
 
-$GITHUB = [ordered]@{
-    "QMK MSYS"            = @{ Api = "https://api.github.com/repos/qmk/qmk_distro_msys/releases/latest"; Filter = "*.exe"; Args = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; sec = 90; cat = "Development" }
-    "claude-usage-widget" = @{ Api = "https://api.github.com/repos/SlavomirDurej/claude-usage-widget/releases/latest"; Filter = "*win-Setup.exe"; Args = "/S"; sec = 60; cat = "AI / Productivity" }
+# Convert JSON arrays (order-preserving) into [ordered] hashtables compatible with the rest of the script
+function ConvertTo-OrderedAppTable {
+    param($Items)
+    $table = [ordered]@{}
+    if (-not $Items) { return $table }
+    foreach ($item in $Items) {
+        $info = @{}
+        foreach ($prop in $item.PSObject.Properties) {
+            if ($prop.Name -ne "name") { $info[$prop.Name] = $prop.Value }
+        }
+        $table[$item.name] = $info
+    }
+    return $table
 }
 
-$MANUAL = [ordered]@{
-    "Adobe Creative Cloud" = @{ url = ""; note = "USB manual installation required (activation and sign-in)" }
-    "Microsoft Office"     = @{ url = ""; note = "USB manual installation required (activation and sign-in)" }
-    "Hancom Office"                = @{ url = ""; note = "USB manual installation required (license key required)" }
-    "Autodesk Fusion"      = @{ url = "https://manage.autodesk.com/"; note = "Download the installer from the official site and install manually" }
-    "FreeFileSync"         = @{ url = "https://freefilesync.org/download.php"; note = "Download from the official site and install manually (silent install not supported)" }
-    "Equalizer APO"        = @{ url = "https://sourceforge.net/projects/equalizerapo/"; note = "Download from the official site and install manually" }
-    "Malware Zero"         = @{ url = "https://malzero.xyz"; note = "Download from the official site, extract it, and run it" }
+$WINGET = ConvertTo-OrderedAppTable $catalogRaw.winget
+$STORE = ConvertTo-OrderedAppTable $catalogRaw.store
+$GITHUB = ConvertTo-OrderedAppTable $catalogRaw.github
+$MANUAL = ConvertTo-OrderedAppTable $catalogRaw.manual
+
+# Custom alternate ID / display-name mappings (JSON object -> hashtable)
+$script:APP_CUSTOM_MAPPINGS = @{}
+if ($catalogRaw.customMappings) {
+    foreach ($prop in $catalogRaw.customMappings.PSObject.Properties) {
+        $script:APP_CUSTOM_MAPPINGS[$prop.Name] = @($prop.Value)
+    }
 }
+
+Write-Log -Level "INFO" -Message "Catalog loaded." -Detail "winget=$($WINGET.Count) store=$($STORE.Count) github=$($GITHUB.Count) manual=$($MANUAL.Count) customMappings=$($script:APP_CUSTOM_MAPPINGS.Count)"
 #endregion
-
-# 0. Define custom alternate IDs and display-name mappings (for Store IDs, GitHub, and special installs)
-$script:APP_CUSTOM_MAPPINGS = @{
-    "9pm860492szd"             = @("microsoft.microsoftpcmanager", "pc manager", "windows pc manager") # Windows PC Manager
-    "xpddt99j9gkb5c"           = @("samsung magician", "samsung.magician", "samsungmagician")        # Samsung Magician
-    "9pf4kz2vn4w9"             = @("translucenttb")                                                 # TranslucentTB
-    "cognitionai.devindesktop" = @("devin (user)", "devin")                               # Devin Desktop
-    "kakao.kakaotalk"          = @("KakaoTalk", "kakaotalk")                                         # Ensure KakaoTalk matches Korean display names
-    
-    "mgth.littlebigmouse"      = @("littlebigmouse", "arp\machine\x86\littlebigmouse")         # LittleBigMouse
-    "qmk msys"                 = @("qmk msys", "qmk msys 1.12.0")                             # QMK MSYS
-    "claude-usage-widget"      = @("claude-usage-widget", "claude-usage-widget 1.7.5")         # claude-usage-widget
-    
-    # Add manual-install item mappings
-    "adobe creative cloud"     = @("adobe.creativecloud", "adobe creative cloud")
-    "microsoft office"         = @("o365proplusretail", "microsoft 365", "office", "Microsoft 365 for enterprise")
-    "Hancom Office"                    = @("Hancom Office")
-    "autodesk fusion"          = @("autodesk fusion", "fusion 360")
-    "freefilesync"             = @("freefilesync")
-    "equalizer apo"            = @("equalizer apo", "equalizerapo")
-}
 
 # ================================================================
 #region ── Selection TUI UI
@@ -1037,18 +825,7 @@ function Write-Header {
     Write-Host ""
 }
 
-function Get-FailReason {
-    param([string]$Output)
-    if (-not $Output) { return 'Unknown error' }
-    if ($Output -match 'No package found|패키지를 찾을 수 없') { return 'Package not found' }
-    if ($Output -match 'No applicable installer') { return 'No compatible installer found' }
-    if ($Output -match 'exit code[:\s]+(-?\d+)') { return "Installation error (exit code $($Matches[1]))" }
-    if ($Output -match 'Installer failed|installation.*실패') { return 'Installer error' }
-    if ($Output -match 'No applicable upgrade') { return 'Upgrade unavailable' }
-    if ($Output -match 'Failed in attempting to update') { return 'Source update failed' }
-    if ($Output -match 'download|다운로드.*실패') { return 'Download failed' }
-    return 'Unknown error'
-}
+# (Get-FailReason now lives in AutoInstaller.Core.ps1)
 
 function Write-SectionBar {
     param([string]$Cat)

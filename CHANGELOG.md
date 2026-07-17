@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0] - 2026-07-17
+
+### Changed
+- **Split code into modules**: moved pure logic functions (`Write-Log`, `Get-VisualWidth`, `Get-VisualPadRight`, `Get-VisualSubstring`, `Get-SafeContentTail`, `Test-IsAppInstalled`, `Get-FailReason`) into `AutoInstaller.Core.ps1`, dot-sourced by `auto-installer.ps1` at startup. Enables independent Pester unit testing without triggering admin elevation, winget calls, or console control.
+- **Externalized the app catalog**: moved the `$WINGET`/`$STORE`/`$GITHUB`/`$MANUAL`/`$APP_CUSTOM_MAPPINGS` hashtables into `catalog.json`. Adding or editing apps no longer requires touching the script. All 54 existing entries (winget 42 · store 3 · github 2 · manual 7) and 14 custom mappings were carried over without data loss.
+- **Documented the winget exit-code constants**: added source/verification-date comments to `-1978335189` / `3010` / `1641`.
+
+### Added
+- **WARN logging for fallback matches**: `Test-IsAppInstalled` now logs a `WARN` line whenever one of its heuristic fallback stages (2-5: custom mapping, version prefix, two-segment, name-contains) decides an app is installed, so false positives can be spotted after the fact by scanning the log file.
+- **Pester unit tests**: added `tests/Core.Tests.ps1`, covering `Get-VisualWidth`, `Get-VisualPadRight`, `Get-VisualSubstring`, `Get-FailReason`, and all 6 stages of `Test-IsAppInstalled` (including the v0.0.10 false-positive fixes and the WARN logging above).
+
+### Fixed
+- **KakaoTalk and Hancom Office Korean display-name matching regression**: the `chore: translate code comments and user-facing strings to English` pass (this repo, June 30) accidentally replaced the literal Korean display-name values `"카카오톡"` and `"한컴오피스"` in the `kakao.kakaotalk` and Hancom Office custom mappings with their English names. Those values are runtime data used to match `winget list`/display-name output on Korean-locale Windows, not comments, so the substitution silently broke installed-app detection for both on Korean systems (they would show as "not installed" even when present). Restored both Korean literals alongside the English variants in `catalog.json`.
+
 ## [0.0.11] - 2026-06-30
 
 ### Added
